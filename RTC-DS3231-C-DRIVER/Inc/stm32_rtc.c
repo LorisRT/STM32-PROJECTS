@@ -1,23 +1,39 @@
-/*
- * stm32_rtc.c
+/**
+ ******************************************************************************
+ * @file           : stm32_rtc.c
+ * @author         : LorisRT
+ * @brief          : Board Support Package (BSP) for RTC DS3231 Module
+ ******************************************************************************
+ * @attention
  *
- *  Created on: 30 April 2023
- *      Author: LorisRT
+ * THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+ * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+ * IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
+ ******************************************************************************
  */
 
 #include <stdint.h>
 #include "stm32_rtc.h"
 
 
-/********************************/
-/* Static Functions Declaration */
-/********************************/
+/**********************************************/
+/* Static Functions and Variables Declaration */
+/**********************************************/
+static volatile uint8_t bufferGet_RTC_DS3231[RTC_REG_SIZE];
+static volatile uint8_t bufferSet_RTC_DS3231[RTC_REG_SET_SIZE];
 
 static inline void clear_addr_reg(void);
 static void stm_clock_config(void);
 static void stm_peripheral_clock_unable(void);
 static stm_i2c_status_e stm_i2c_send_addr(uint8_t addr_sensor, uint8_t rw_bit);
 static stm_i2c_status_e stm_i2c_send_data(uint8_t data);
+static stm_i2c_status_e DS3231_I2C_writePointer(uint8_t slave_reg);
+static stm_i2c_status_e DS3231_I2C_readStream(volatile uint8_t *buffer_array, uint8_t burst_size);
+static stm_i2c_status_e DS3231_I2C_writeStream(volatile uint8_t *buffer_array, uint8_t burst_size);
 
 
 /***********************/
@@ -47,15 +63,81 @@ static volatile uint16_t *ptr_I2C1_DR = (uint16_t *) I2C1_DR;
 /************************/
 
 /**
+ * @brief: Function to extract the time measured by RTC DS3231 Module
+ * @author: LorisRT
+ */
+rtc_ds3231_status_e rtc_getTime(time_t *t)
+{
+	/**
+	 * As state in the data sheet: "If the register pointer is not
+	 * written to before the initiation of a read mode, the first
+	 * address that is read is the last one stored in the register pointer".
+	 * For that reason, the RTC DS3231 register pointer is initialised
+	 * to the first register (00h) before performing a stream read to be sure
+	 * that the correct data format is saved in the buffer_RTC_DS3231 variable
+     */
+	if (STM_I2C_OK != DS3231_I2C_writePointer(RTC_REG_SEC))
+	{
+		return RTC_ERROR;
+	}
+
+	/* Get all RTC register content and store it in static buffer */
+	if (STM_I2C_OK != DS3231_I2C_readStream(bufferGet_RTC_DS3231, RTC_REG_SIZE))
+	{
+		return RTC_ERROR;
+	}
+
+	/* Save current time and date into dedicated output structure */
+	t->seconds = (uint8_t) ((((bufferGet_RTC_DS3231[0] >> 0) & 0x0f) * 1) + (((bufferGet_RTC_DS3231[0] >> 4) & 0x0f) * 10));
+	t->minutes = (uint8_t) ((((bufferGet_RTC_DS3231[1] >> 0) & 0x0f) * 1) + (((bufferGet_RTC_DS3231[1] >> 4) & 0x0f) * 10));
+	t->hours = (uint8_t) ((((bufferGet_RTC_DS3231[2] >> 0) & 0x0f) * 1) + (((bufferGet_RTC_DS3231[2] >> 4) & 0x01) * 10));
+	t->date = (uint8_t) ((((bufferGet_RTC_DS3231[4] >> 0) & 0x0f) * 1) + (((bufferGet_RTC_DS3231[4] >> 4) & 0x03) * 10));
+	t->month = (uint8_t) ((((bufferGet_RTC_DS3231[5] >> 0) & 0x0f) * 1) + (((bufferGet_RTC_DS3231[5] >> 4) & 0x01) * 10));
+	t->year = (uint8_t) ((((bufferGet_RTC_DS3231[6] >> 0) & 0x0f) * 1) + (((bufferGet_RTC_DS3231[6] >> 4) & 0x0f) * 10));
+
+	return RTC_OK;
+}
+
+/**
+ * @brief: Function to set the time for the RTC DS3231 Module
+ * @author: LorisRT
+ */
+rtc_ds3231_status_e rtc_setTime(time_t *t)
+{
+	/* Decimal to Binary-Coded Decimal (BCD) conversion */
+	bufferSet_RTC_DS3231[0] = (((t->seconds)/10) << 4) | ((t->seconds) % 10);
+	bufferSet_RTC_DS3231[1] = (((t->minutes)/10) << 4) | ((t->minutes) % 10);
+	bufferSet_RTC_DS3231[2] = (((t->hours)/10) << 4) | ((t->hours) % 10);
+	bufferSet_RTC_DS3231[3] = (uint8_t) 0; /* Day not set */
+	bufferSet_RTC_DS3231[4] = (((t->date)/10) << 4) | ((t->date) % 10);
+	bufferSet_RTC_DS3231[5] = (((t->month)/10) << 4) | ((t->month) % 10);
+	bufferSet_RTC_DS3231[6] = (((t->year)/10) << 4) | ((t->year) % 10);
+
+	if (STM_I2C_OK != DS3231_I2C_writePointer(RTC_REG_SEC))
+	{
+		return RTC_ERROR;
+	}
+
+	/* Get all RTC register content and store it in static buffer */
+	if (STM_I2C_OK != DS3231_I2C_writeStream(bufferSet_RTC_DS3231, RTC_REG_SET_SIZE))
+	{
+		return RTC_ERROR;
+	}
+
+	return RTC_OK;
+}
+
+
+/**
  * @brief Function to read stream bytes of data from RTC DS3231 registers
  * @author LorisRT
  */
-stm_i2c_status_e DS3231_I2C_readStream(uint8_t *buffer_array, uint8_t burst_size)
+static stm_i2c_status_e DS3231_I2C_readStream(volatile uint8_t *buffer_array, uint8_t burst_size)
 {
 	uint8_t temp_idx = 0;
 
 	/* Send slave ADDR with read condition */
-	if(STM_I2C_OK != stm_i2c_send_addr(ADDR_RTC_DS3231, 1))
+	if(STM_I2C_OK != stm_i2c_send_addr(ADDR_RTC_DS3231, READ))
 	{
 		return STM_I2C_ADDR_FAIL;
 	}
@@ -81,13 +163,55 @@ stm_i2c_status_e DS3231_I2C_readStream(uint8_t *buffer_array, uint8_t burst_size
 
 
 /**
+ * @brief: Function to write stream bytes of data to RTC DS3231 registers
+ * 		   starting at address 00h to 12h
+ * @author: LorisRT
+ */
+static stm_i2c_status_e DS3231_I2C_writeStream(volatile uint8_t *buffer_array, uint8_t burst_size)
+{
+	uint8_t temp_idx = 0, nack_flag = 0x00;
+
+	/* Send slave ADDR with write condition */
+	if(STM_I2C_OK != stm_i2c_send_addr(ADDR_RTC_DS3231, WRITE))
+	{
+		return STM_I2C_ADDR_FAIL;
+	}
+
+	/* Send sensor register ADDR on SDA line */
+	if (STM_I2C_OK != stm_i2c_send_data(RTC_REG_SEC))
+	{
+		return STM_I2C_WRITE_FAIL;
+	}
+
+	/* Write stream burst on SDA line */
+	while (burst_size-- > 0U && 0x01 != (nack_flag = GET_STM_I2C_ACK_STATUS_FLAG()))
+	{
+		while (0x00 == GET_STM_I2C_TX_STATUS_FLAG());
+		*ptr_I2C1_DR = *(buffer_array + temp_idx++);
+	}
+
+	/* NACK from sensor: could not proceed data from SDA line */
+	if (0x01 == nack_flag)
+	{
+		return STM_I2C_WRITE_FAIL;
+	}
+
+	/* Wait for TX=1 bit and send stop condition */
+	while (0x00 == GET_STM_I2C_TX_STATUS_FLAG());
+	*ptr_I2C1_CR1 |= (1 << 9);
+
+	return STM_I2C_OK;
+}
+
+
+/**
  * @brief Function to write one byte of data to RTC DS3231 register
  * @author LorisRT
  */
-stm_i2c_status_e DS3231_I2C_writePointer(uint8_t slave_reg)
+static stm_i2c_status_e DS3231_I2C_writePointer(uint8_t slave_reg)
 {
 	/* Send slave ADDR with write condition */
-	if (STM_I2C_OK != stm_i2c_send_addr(ADDR_RTC_DS3231, 0))
+	if (STM_I2C_OK != stm_i2c_send_addr(ADDR_RTC_DS3231, WRITE))
 	{
 		return STM_I2C_ADDR_FAIL;
 	}
@@ -112,8 +236,8 @@ stm_i2c_status_e DS3231_I2C_writePointer(uint8_t slave_reg)
 static stm_i2c_status_e stm_i2c_send_data(uint8_t data)
 {
 	*ptr_I2C1_DR = data;
-	while ((GET_STM_I2C_TX_STATUS_FLAG() == 0x00) & (GET_STM_I2C_ACK_STATUS_FLAG() == 0x00));
-	if (GET_STM_I2C_ACK_STATUS_FLAG() == 0x01)
+	while (0x00 == GET_STM_I2C_TX_STATUS_FLAG() && 0x00 == GET_STM_I2C_ACK_STATUS_FLAG());
+	if (0x01 == GET_STM_I2C_ACK_STATUS_FLAG())
 	{
 		return STM_I2C_WRITE_FAIL;
 	}
@@ -128,15 +252,21 @@ static stm_i2c_status_e stm_i2c_send_data(uint8_t data)
  */
 static stm_i2c_status_e stm_i2c_send_addr(uint8_t addr_sensor, uint8_t rw_bit)
 {
-	/* Enable ACK and generate start condition*/
+	/* Verify read/write bit argument provided to function */
+	if (WRITE != rw_bit && READ != rw_bit)
+	{
+		return STM_I2C_ERROR;
+	}
+
+	/* Enable ACK and generate start condition */
 	*ptr_I2C1_CR1 |= (1 << 10);
 	*ptr_I2C1_CR1 |= (1 << 8);
-	while (GET_STM_I2C_START_STATUS_FLAG() == 0x00);
+	while (0x00 == GET_STM_I2C_START_STATUS_FLAG());
 
 	/* Slave ADDR transmission */
 	*ptr_I2C1_DR = (addr_sensor << 1) | (rw_bit << 0);
-	while ((GET_STM_I2C_ADDR_STATUS_FLAG() == 0x00) && (GET_STM_I2C_ACK_STATUS_FLAG() == 0x00));
-	if (GET_STM_I2C_ACK_STATUS_FLAG() == 0x01) /* Note: ADDR is not set after NACK reception */
+	while (0x00 == GET_STM_I2C_ADDR_STATUS_FLAG() && 0x00 == GET_STM_I2C_ACK_STATUS_FLAG());
+	if (0x01 == GET_STM_I2C_ACK_STATUS_FLAG()) /* Note: ADDR is not set after NACK reception */
 	{
 		return STM_I2C_ADDR_FAIL;
 	}
@@ -175,7 +305,7 @@ void stm_i2c_config(void)
 	/* Configure SCL CLK value for 100kHz communication speed */
 	*ptr_I2C1_CR2 = (*ptr_I2C1_CR2 & ~(0x3f << 0)) | (0b001000 << 0); /* 8MHz for APB1 CLK value from HSE */
 	*ptr_I2C1_CCR = *ptr_I2C1_CCR & ~(1 << 15); /* 100kHz Slow Mode (SM) */
-	*ptr_I2C1_CCR = (*ptr_I2C1_CCR & ~(0xfff << 0)) | (0x028 << 0); /* (T_high = CCR * T_clk) ==> (CCR = 5000ns/125ns = 40 = 0x28 */
+	*ptr_I2C1_CCR = (*ptr_I2C1_CCR & ~(0xfff << 0)) | (0x028 << 0); /* (T_high = CCR * T_clk) ==> (CCR = 5000ns/125ns = 40 = 0x28) */
 	*ptr_I2C1_TRISE = ((*ptr_I2C1_TRISE) & ~(0b111111 << 0)) | (0b001001 << 0); /* (1000ns/125ns + 1) = 9 */
 
 	/* Enable I2C peripheral after configuration */
@@ -202,11 +332,11 @@ static void stm_clock_config(void)
 {
 	/* Turn ON HSE CLK and wait for output to be stable */
 	*ptr_RCC_CR |= (1 << 16);
-	while ( (((uint8_t)(*ptr_RCC_CR >> 17)) & (0x01)) == 0x00 );
+	while (0x00 == GET_STM_HSE_STATUS_FLAG());
 
 	/* Set HSE CLK as system CLK and wait for hardware indication that HSE has been set*/
 	*ptr_RCC_CFGR = (*ptr_RCC_CFGR & ~(0x03 << 0)) | (0x01);
-	while ( (((uint8_t)(*ptr_RCC_CFGR >> 2)) & (0x03)) != 0x01 );
+	while (0x01 != GET_STM_CLK_SWITCH_STATUS_FLAG());
 }
 
 
@@ -222,7 +352,7 @@ static void stm_peripheral_clock_unable(void)
 
 
 /**
- * @brief Procedure to clear addr once set
+ * @brief Procedure to clear ADDR bit once it is set
  * @author LorisRT
  */
 static inline void clear_addr_reg(void)

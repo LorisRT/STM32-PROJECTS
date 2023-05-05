@@ -1,8 +1,19 @@
-/*
- * stm32_rtc.h
+/**
+ ******************************************************************************
+ * @file           : stm32_rtc.h
+ * @author         : LorisRT
+ * @brief          : BSP RTC DS3231 Header File
+ ******************************************************************************
+ * @attention
  *
- *  Created on: 30 April 2023
- *      Author: LorisRT
+ * THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+ * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+ * IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
+ ******************************************************************************
  */
 
 #ifndef STM32_RTC_H_
@@ -32,22 +43,43 @@
 
 /* RTC DS3231 Register Address */
 #define ADDR_RTC_DS3231		0x68
+#define RTC_REG_SIZE		19 /* Number of RTC registers from ds3231 module */
+#define RTC_REG_SET_SIZE	7 /* Number of registers to set in ds3231 module */
 #define RTC_REG_SEC			0x00 /* 00-59 */
 #define RTC_REG_MIN			0x01 /* 00-59 */
-#define RTC_REG_HOUR		0x02
+#define RTC_REG_HOUR		0x02 /* 00-23 */
 #define RTC_REG_DAY			0x03 /*  1-7  */
 #define RTC_REG_DATE		0x04 /* 01-31 */
 #define RTC_REG_MONTH		0x05 /* 01-12 */
 #define RTC_REG_YEAR		0x06 /* 00-99 */
 
 /* Macros Definition */
-#define GET_STM_I2C_START_STATUS_FLAG()	(((uint8_t)(*ptr_I2C1_SR1 >> 0)) & (0x01))
-#define GET_STM_I2C_ADDR_STATUS_FLAG()	(((uint8_t)(*ptr_I2C1_SR1 >> 1)) & (0x01))
-#define GET_STM_I2C_ACK_STATUS_FLAG() 	(((uint8_t)(*ptr_I2C1_SR1 >> 10)) & (0x01))
-#define GET_STM_I2C_TX_STATUS_FLAG()	(((uint8_t)(*ptr_I2C1_SR1 >> 7)) & (0x01))
-#define GET_STM_I2C_RX_STATUS_FLAG()	(((uint8_t)(*ptr_I2C1_SR1 >> 6)) & (0x01))
+#define READ		1
+#define WRITE		0
+#define GET_STM_HSE_STATUS_FLAG()			( ((uint8_t)(*ptr_RCC_CR >> 17)) & (0x01) )
+#define GET_STM_CLK_SWITCH_STATUS_FLAG()	( ((uint8_t)(*ptr_RCC_CFGR >> 2)) & (0x03) )
+#define GET_STM_I2C_START_STATUS_FLAG()		( ((uint8_t)(*ptr_I2C1_SR1 >> 0)) & (0x01) )
+#define GET_STM_I2C_ADDR_STATUS_FLAG()		( ((uint8_t)(*ptr_I2C1_SR1 >> 1)) & (0x01) )
+#define GET_STM_I2C_ACK_STATUS_FLAG() 		( ((uint8_t)(*ptr_I2C1_SR1 >> 10)) & (0x01) )
+#define GET_STM_I2C_TX_STATUS_FLAG()		( ((uint8_t)(*ptr_I2C1_SR1 >> 7)) & (0x01) )
+#define GET_STM_I2C_RX_STATUS_FLAG()		( ((uint8_t)(*ptr_I2C1_SR1 >> 6)) & (0x01) )
+#define GET_STM_I2C_BTF_STATUS_FLAG()		( ((uint8_t)(*ptr_I2C1_SR1 >> 2)) & (0x01) )
 
 /* Enumeration and Structure Definition */
+typedef struct {
+	uint8_t seconds;
+	uint8_t minutes;
+	uint8_t hours;
+	uint8_t date;
+	uint8_t month;
+	uint8_t year;
+} time_t;
+
+typedef enum {
+	RTC_OK,
+	RTC_ERROR
+} rtc_ds3231_status_e;
+
 typedef enum {
 	STM_I2C_OK,
 	STM_I2C_ADDR_FAIL,
@@ -59,7 +91,7 @@ typedef enum {
 /* Functions Prototype */
 void stm_enable_clock(void);
 void stm_i2c_config(void);
-stm_i2c_status_e DS3231_I2C_writePointer(uint8_t slave_reg);
-stm_i2c_status_e DS3231_I2C_readStream(uint8_t *buffer_array, uint8_t burst_size);
+rtc_ds3231_status_e rtc_getTime(time_t *t);
+rtc_ds3231_status_e rtc_setTime(time_t *t);
 
 #endif /* STM32_RTC_H_ */
