@@ -98,6 +98,7 @@ rtc_ds3231_status_e rtc_getTime(time_t *t)
 	return RTC_OK;
 }
 
+
 /**
  * @brief: Function to set the time for the RTC DS3231 Module
  * @author: LorisRT
@@ -113,12 +114,13 @@ rtc_ds3231_status_e rtc_setTime(time_t *t)
 	bufferSet_RTC_DS3231[5] = (((t->month)/10) << 4) | ((t->month) % 10);
 	bufferSet_RTC_DS3231[6] = (((t->year)/10) << 4) | ((t->year) % 10);
 
+	/* Set RTC pointer register to 00h ADDR */
 	if (STM_I2C_OK != DS3231_I2C_writePointer(RTC_REG_SEC))
 	{
 		return RTC_ERROR;
 	}
 
-	/* Get all RTC register content and store it in static buffer */
+	/* Set RTC register content from static buffer */
 	if (STM_I2C_OK != DS3231_I2C_writeStream(bufferSet_RTC_DS3231, RTC_REG_SET_SIZE))
 	{
 		return RTC_ERROR;
